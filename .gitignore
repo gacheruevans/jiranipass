@@ -151,3 +151,7 @@ Desktop.ini
 *.sublime-project
 *.swp
 *.swo
+
+# Plans
+implementation.md
+workplan.md
