@@ -1,0 +1,331 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  SUPER_ADMIN
+  ESTATE_ADMIN
+  SUPERVISOR
+  GUARD
+  RESIDENT
+}
+
+enum VisitStatus {
+  PENDING
+  APPROVED
+  DENIED
+  EXPIRED
+  DELIVERY_FAILED
+  CHECKED_IN
+  CHECKED_OUT
+  REVOKED
+  OVERRIDE_ADMITTED
+}
+
+enum MessageSendState {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum DecisionValue {
+  APPROVE
+  DENY
+}
+
+enum DecisionChannel {
+  WHATSAPP_BUTTON
+  WEB_LINK
+}
+
+enum WebhookProcessingState {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+enum VerificationMethod {
+  GOVERNMENT_ID
+  PHYSICAL_RECOGNITION
+  PHONE_CALL_CONFIRMED
+  SUPERVISOR_EXCEPTION
+}
+
+enum AccessAction {
+  REQUEST_CREATED
+  APPROVED
+  DENIED
+  CHECKED_IN
+  CHECKED_OUT
+  OVERRIDE_ADMITTED
+  EXPIRED
+  REVOKED
+}
+
+enum ConsentSource {
+  ADMIN_PORTAL
+  SMS_INVITE
+  QR_CODE
+  PAPER_FORM
+}
+
+model Estate {
+  id                    String         @id @default(cuid())
+  name                  String
+  timezone              String         @default("Africa/Nairobi")
+  approvalTtlMinutes    Int            @default(10)
+  visitorRetentionDays  Int            @default(90)
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  households            Household[]
+  memberships           Membership[]
+  guardShifts           GuardShift[]
+  visitors              Visitor[]
+  visitRequests         VisitRequest[]
+
+  @@map("estates")
+}
+
+model Household {
+  id          String         @id @default(cuid())
+  estateId    String
+  unitCode    String
+  isActive    Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  estate      Estate         @relation(fields: [estateId], references: [id], onDelete: Cascade)
+  memberships Membership[]
+  visitRequests VisitRequest[]
+
+  @@unique([estateId, unitCode])
+  @@index([estateId, isActive])
+  @@map("households")
+}
+
+model User {
+  id               String            @id @default(cuid())
+  name             String
+  phone            String            // Normalized E.164 (e.g. +254712345678)
+  phoneLookupHash  String            // SHA-256 hash for fast indexing without exposing raw PII
+  passwordHash     String?           // For Admins/Guards with login
+  pinHash          String?           // Quick PIN for Guards / Supervisors
+  verifiedAt       DateTime?
+  disabledAt       DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  memberships      Membership[]
+  whatsappConsents WhatsAppConsent[]
+  guardShifts      GuardShift[]
+  assignedVisits   VisitRequest[]    @relation("AssignedResident")
+  loggedVisits     VisitRequest[]    @relation("GuardCreator")
+  decisions        VisitDecision[]
+  accessEvents     AccessEvent[]
+
+  @@index([phoneLookupHash])
+  @@index([phone])
+  @@map("users")
+}
+
+model Membership {
+  id          String     @id @default(cuid())
+  userId      String
+  estateId    String
+  householdId String?
+  role        Role       @default(RESIDENT)
+  isPrimary   Boolean    @default(false) // Single primary resident decision maker per household
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  estate      Estate     @relation(fields: [estateId], references: [id], onDelete: Cascade)
+  household   Household? @relation(fields: [householdId], references: [id], onDelete: SetNull)
+
+  @@index([estateId, role])
+  @@index([householdId, isPrimary])
+  @@map("memberships")
+}
+
+model WhatsAppConsent {
+  id               String        @id @default(cuid())
+  userId           String
+  phone            String
+  purpose          String        @default("ESTATE_VISITOR_ACCESS_ALERTS")
+  noticeVersion    String        @default("1.0")
+  grantedAt        DateTime      @default(now())
+  withdrawnAt      DateTime?
+  collectionSource ConsentSource @default(ADMIN_PORTAL)
+  createdAt        DateTime      @default(now())
+
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([phone, withdrawnAt])
+  @@map("whatsapp_consents")
+}
+
+model GuardShift {
+  id        String    @id @default(cuid())
+  guardId   String
+  gateId    String
+  estateId  String
+  deviceId  String
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  createdAt DateTime  @default(now())
+
+  guard     User      @relation(fields: [guardId], references: [id], onDelete: Cascade)
+  estate    Estate    @relation(fields: [estateId], references: [id], onDelete: Cascade)
+
+  @@index([guardId, endedAt])
+  @@index([estateId, gateId])
+  @@map("guard_shifts")
+}
+
+model Visitor {
+  id                   String         @id @default(cuid())
+  estateId             String
+  name                 String
+  phone                String?
+  vehicleRegistration String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  estate               Estate         @relation(fields: [estateId], references: [id], onDelete: Cascade)
+  visitRequests        VisitRequest[]
+
+  @@index([estateId, name])
+  @@index([estateId, vehicleRegistration])
+  @@map("visitors")
+}
+
+model VisitRequest {
+  id                 String          @id @default(cuid())
+  estateId           String
+  householdId        String
+  visitorId          String
+  guardId            String
+  assignedResidentId String
+  gateId             String
+  reference          String          @unique // e.g. V-8K4Q
+  status             VisitStatus     @default(PENDING)
+  purpose            String?
+  version            Int             @default(1) // Optimistic concurrency lock
+  idempotencyKey     String?         @unique
+
+  createdAt          DateTime        @default(now())
+  expiresAt          DateTime
+  approvedUntil      DateTime?
+  checkedInAt        DateTime?
+  checkedOutAt       DateTime?
+  updatedAt          DateTime        @updatedAt
+
+  estate             Estate          @relation(fields: [estateId], references: [id], onDelete: Cascade)
+  household          Household       @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  visitor            Visitor         @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+  guard              User            @relation("GuardCreator", fields: [guardId], references: [id], onDelete: Restrict)
+  assignedResident   User            @relation("AssignedResident", fields: [assignedResidentId], references: [id], onDelete: Restrict)
+
+  decision           VisitDecision?
+  messageAttempts    MessageAttempt[]
+  accessEvents       AccessEvent[]
+
+  @@index([estateId, status, createdAt])
+  @@index([householdId, createdAt])
+  @@index([assignedResidentId, status])
+  @@index([gateId, status])
+  @@map("visit_requests")
+}
+
+model VisitDecision {
+  id                String          @id @default(cuid())
+  visitRequestId    String          @unique
+  residentId        String
+  decision          DecisionValue
+  channel           DecisionChannel @default(WHATSAPP_BUTTON)
+  providerMessageId String?
+  decidedAt         DateTime        @default(now())
+
+  visitRequest      VisitRequest    @relation(fields: [visitRequestId], references: [id], onDelete: Cascade)
+  resident          User            @relation(fields: [residentId], references: [id], onDelete: Restrict)
+
+  @@map("visit_decisions")
+}
+
+model MessageAttempt {
+  id                String           @id @default(cuid())
+  visitRequestId    String
+  recipientPhone    String
+  templateName      String
+  templateVersion   String           @default("1.0")
+  sendState         MessageSendState @default(PENDING)
+  providerMessageId String?          @unique // Meta wamid
+  errorCode         String?
+  retryCount        Int              @default(0)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  visitRequest      VisitRequest     @relation(fields: [visitRequestId], references: [id], onDelete: Cascade)
+
+  @@index([visitRequestId, sendState])
+  @@index([providerMessageId])
+  @@map("message_attempts")
+}
+
+model WebhookEvent {
+  id              String                 @id @default(cuid())
+  providerEventId String                 @unique // Unique deduplication key
+  eventType       String
+  payload         Json
+  processingState WebhookProcessingState @default(RECEIVED)
+  receivedAt      DateTime               @default(now())
+
+  @@index([providerEventId])
+  @@map("webhook_events")
+}
+
+model AccessEvent {
+  id                 String              @id @default(cuid())
+  visitRequestId     String
+  actorId            String
+  action             AccessAction
+  gateId             String
+  reason             String?             // Required for supervisor overrides
+  verificationMethod VerificationMethod?
+  deviceId           String?
+  previousStatus     VisitStatus
+  newStatus          VisitStatus
+  createdAt          DateTime            @default(now())
+
+  visitRequest       VisitRequest        @relation(fields: [visitRequestId], references: [id], onDelete: Cascade)
+  actor              User                @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([visitRequestId, createdAt])
+  @@index([actorId, action])
+  @@map("access_events")
+}
+
+model OutboxEvent {
+  id           String    @id @default(cuid())
+  aggregateId  String    // e.g. visitRequestId
+  eventType    String    // e.g. VISIT_REQUEST_CREATED
+  payload      Json
+  deliveredAt  DateTime?
+  retryCount   Int       @default(0)
+  lastError    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([deliveredAt, createdAt])
+  @@map("outbox_events")
+}

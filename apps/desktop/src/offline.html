@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>JiraniPass Guard — Standby</title>
+  <style>
+    body {
+      background-color: #0F172A;
+      color: #F8FAFC;
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      text-align: center;
+    }
+    .badge {
+      width: 56px;
+      height: 56px;
+      background: #2563EB;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      font-weight: 800;
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 24px;
+      margin: 0 0 8px 0;
+    }
+    p {
+      color: #94A3B8;
+      font-size: 14px;
+      max-width: 400px;
+      line-height: 1.5;
+      margin: 0 0 24px 0;
+    }
+    button {
+      background-color: #2563EB;
+      color: #FFFFFF;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #1D4ED8;
+    }
+  </style>
+</head>
+<body>
+  <div class="badge">J</div>
+  <h1>JiraniPass Guard Station</h1>
+  <p>Connecting to estate security server... If the server is offline, ensure the local API container is running.</p>
+  <button onclick="window.location.reload()">Retry Connection</button>
+</body>
+</html>

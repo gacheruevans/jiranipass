@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "JiraniPass Guard",
+    "slug": "jiranipass-guard",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "jiranipass",
+    "userInterfaceStyle": "dark",
+    "platforms": ["android", "ios", "web"],
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0F172A"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jiranipass.guard",
+      "infoPlist": {
+        "UIRequiresFullScreen": true,
+        "NSCameraUsageDescription": "JiraniPass requires camera access to scan visitor vehicle license plates and ID documents."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0F172A"
+      },
+      "package": "com.jiranipass.guard",
+      "versionCode": 1,
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "VIBRATE",
+        "CAMERA"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

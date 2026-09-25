@@ -31,14 +31,56 @@
 
 ## Architecture & Technology Stack
 
-| Layer | Technology | Purpose |
-| :--- | :--- | :--- |
-| **Guard Mobile App** | React Native (Expo) | Gate tablet/phone interface for visitor capture, live SSE updates, and check-in/out |
-| **Management Console** | Next.js, React, Tailwind CSS | Estate administration, unit enrollment, resident consent tracking, and audit log review |
-| **Backend API** | NestJS (TypeScript) | RBAC, tenant scoping, visit state engine, SSE streams, and webhook ingestion |
-| **Outbox & Jobs** | Redis + BullMQ | Reliable WhatsApp message delivery with backoff retry and request expiry management |
-| **Database** | PostgreSQL + Prisma | Relational data persistence, optimistic concurrency control, and immutable audit logs |
-| **Messaging Integration** | WhatsApp Business Cloud API (Meta) | Signed quick-reply utility templates with HMAC-SHA256 signature verification |
+| Layer | Technology | Purpose | Supported Platforms |
+| :--- | :--- | :--- | :--- |
+| **Guard Mobile App** | React Native (Expo) | Gate interface for visitor arrival capture & live approvals | **Android (APK/AAB)**, **iOS (IPA)** |
+| **Desktop Gate Station** | Electron | High-performance kiosk station for gate booths | **Linux (.AppImage, .deb)** |
+| **Universal PWA** | Next.js, Web App Manifest | Zero-install offline app with 1-click desktop/mobile installation | **Linux**, **Android**, **iOS** |
+| **Management Console** | Next.js, React, Tailwind CSS | Estate administration, unit enrollment, resident consent tracking | Web / Desktop / Mobile |
+| **Backend API** | NestJS (TypeScript) | RBAC, tenant scoping, visit state engine, SSE streams, webhooks | Linux Container (Docker) |
+| **Outbox & Jobs** | Redis + BullMQ | Reliable WhatsApp message delivery with backoff retry & expiry | Linux Container (Docker) |
+| **Database** | PostgreSQL + Prisma | Relational data persistence, optimistic concurrency control | PostgreSQL 16 |
+
+---
+
+## Cross-Platform Installation (Android, iOS & Linux)
+
+JiraniPass can be installed across all devices used by guards, supervisors, and gate stations:
+
+### 🤖 Android Devices (Phones & Tablets)
+1. **Direct Standalone APK**: Download the pre-built `JiraniPass-Guard-v1.0.apk` from the Download Hub (`/download`) or build locally:
+   ```bash
+   pnpm --filter @jiranipass/mobile eas build -p android --profile preview
+   ```
+2. **Instant PWA Installation**: Open the web portal in Chrome on Android and tap **"Install App"** to add it to your home screen.
+3. **Google Play Store AAB**: Generate production App Bundle via `eas build -p android --profile production`.
+
+### 🍏 iOS Devices (iPhone & iPad)
+1. **Safari Standalone App**: Open the web portal in iOS Safari, tap the **Share** button, and select **"Add to Home Screen"**.
+2. **iPad Gate Kiosk Lock**: Mount an iPad at the gate station and enable **Guided Access** (`Settings > Accessibility > Guided Access`) to lock the station strictly into JiraniPass.
+3. **TestFlight / Enterprise IPA**: Build with `pnpm --filter @jiranipass/mobile eas build -p ios`.
+
+### 🐧 Linux Devices & Security Booth Terminals
+1. **Universal Linux `.AppImage`**:
+   Runs on all Linux distributions (Ubuntu, Debian, Fedora, Arch, Raspberry Pi OS) with zero external dependencies:
+   ```bash
+   # Build Linux AppImage
+   pnpm desktop:linux
+
+   # Run on any Linux machine
+   chmod +x JiraniPass-Guard-1.0.0-linux-x86_64.AppImage
+   ./JiraniPass-Guard-1.0.0-linux-x86_64.AppImage
+   ```
+2. **Debian / Ubuntu `.deb` Package**:
+   ```bash
+   sudo dpkg -i jiranipass-guard_1.0.0_amd64.deb
+   ```
+3. **Fullscreen Kiosk Mode** (for Raspberry Pi or booth touchscreens):
+   ```bash
+   pnpm desktop:start -- --kiosk
+   ```
+4. **Linux Desktop PWA Launcher**:
+   In Chrome/Chromium/Edge on Linux, click the install icon in the address bar to create a native desktop launcher integrated into your desktop environment (GNOME, KDE Plasma, XFCE).
 
 ---
 

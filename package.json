@@ -1,0 +1,33 @@
+{
+  "name": "jiranipass",
+  "version": "1.0.0",
+  "private": true,
+  "description": "JiraniPass — Secure Estate Visitor Access Management via WhatsApp",
+  "scripts": {
+    "dev:api": "pnpm --filter @jiranipass/api start:dev",
+    "dev:worker": "pnpm --filter @jiranipass/worker start:dev",
+    "dev:web": "pnpm --filter @jiranipass/web dev",
+    "dev:mobile": "pnpm --filter @jiranipass/mobile start",
+    "desktop:start": "pnpm --filter @jiranipass/desktop start",
+    "desktop:linux": "pnpm --filter @jiranipass/desktop build:linux",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "db:generate": "pnpm --filter @jiranipass/database generate",
+    "db:push": "pnpm --filter @jiranipass/database push",
+    "db:studio": "pnpm --filter @jiranipass/database studio",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild",
+      "electron"
+    ]
+  }
+}

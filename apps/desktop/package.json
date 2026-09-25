@@ -1,0 +1,43 @@
+{
+  "name": "@jiranipass/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "JiraniPass Desktop Gate Station for Linux, Windows and macOS",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:linux": "electron-builder --linux AppImage deb tar.gz",
+    "build:appimage": "electron-builder --linux AppImage",
+    "build:deb": "electron-builder --linux deb",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.jiranipass.guard.desktop",
+    "productName": "JiraniPass Guard",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb",
+        "tar.gz"
+      ],
+      "category": "Security",
+      "synopsis": "JiraniPass Estate Visitor Access Station",
+      "description": "Desktop security gate station for residential estates and commercial communities. Records visitors and coordinates WhatsApp approvals.",
+      "desktop": {
+        "StartupNotify": "true",
+        "Terminal": "false"
+      }
+    }
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "electron": "^34.3.0",
+    "electron-builder": "^25.1.8"
+  }
+}

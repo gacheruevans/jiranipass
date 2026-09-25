@@ -1,0 +1,137 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap');
+
+:root {
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* HSL Tailored Brand Colors */
+  --primary-50: hsl(224, 100%, 97%);
+  --primary-100: hsl(224, 94%, 92%);
+  --primary-500: hsl(224, 76%, 48%);
+  --primary-600: hsl(224, 76%, 40%);
+  --primary-900: hsl(224, 64%, 20%);
+
+  /* Surface & Neutrals */
+  --bg-app: hsl(220, 25%, 97%);
+  --bg-card: hsl(0, 0%, 100%);
+  --border-subtle: hsl(220, 16%, 90%);
+  --border-medium: hsl(220, 16%, 82%);
+  
+  --text-main: hsl(222, 47%, 11%);
+  --text-muted: hsl(215, 16%, 45%);
+  --text-faint: hsl(215, 14%, 65%);
+
+  /* Status Colors */
+  --status-pending-bg: hsl(45, 93%, 95%);
+  --status-pending-text: hsl(35, 92%, 33%);
+  --status-pending-border: hsl(45, 93%, 80%);
+
+  --status-approved-bg: hsl(143, 85%, 96%);
+  --status-approved-text: hsl(145, 80%, 25%);
+  --status-approved-border: hsl(142, 70%, 82%);
+
+  --status-checkedin-bg: hsl(214, 95%, 96%);
+  --status-checkedin-text: hsl(221, 83%, 40%);
+  --status-checkedin-border: hsl(214, 95%, 85%);
+
+  --status-denied-bg: hsl(0, 86%, 97%);
+  --status-denied-text: hsl(0, 72%, 40%);
+  --status-denied-border: hsl(0, 86%, 88%);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-app);
+  color: var(--text-main);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Glassmorphism Card Effect */
+.glass-card {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.04), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
+  border-radius: 12px;
+}
+
+.panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+/* Interactive Buttons */
+.btn-primary {
+  background: var(--primary-500);
+  color: #ffffff;
+  padding: 0.6rem 1.25rem;
+  border-radius: 8px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-primary:hover {
+  background: var(--primary-600);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+}
+
+.btn-primary:active {
+  transform: scale(0.98);
+}
+
+.btn-secondary {
+  background: #ffffff;
+  color: var(--text-main);
+  border: 1px solid var(--border-medium);
+  padding: 0.6rem 1.25rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 150ms ease;
+}
+
+.btn-secondary:hover {
+  background: var(--primary-50);
+  border-color: var(--primary-500);
+  color: var(--primary-600);
+}
+
+/* Accessible Focus Rings */
+:focus-visible {
+  outline: 2px solid var(--primary-500);
+  outline-offset: 2px;
+}
+
+/* Pulse animation for live pending requests */
+@keyframes pulse-ring {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.15); opacity: 0.4; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.pulse-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: hsl(38, 92%, 50%);
+  animation: pulse-ring 2s infinite ease-in-out;
+}

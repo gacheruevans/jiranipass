@@ -1,0 +1,31 @@
+{
+  "name": "JiraniPass Estate Access",
+  "short_name": "JiraniPass",
+  "description": "Secure estate visitor access control and WhatsApp verification station for Android, iOS, and Linux.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0F172A",
+  "theme_color": "#0F172A",
+  "categories": ["security", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
