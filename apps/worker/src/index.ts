@@ -3,9 +3,27 @@ dotenv.config({ path: ['.env', '../../.env'] });
 
 import { prisma } from '@jiranipass/database';
 import { WhatsAppClient } from './whatsapp-client.js';
-import { MessageSendState, VisitStatus } from '@jiranipass/shared';
+import { MessageSendState, VisitStatus, SSEMessage } from '@jiranipass/shared';
+import Redis from 'ioredis';
 
 const whatsAppClient = new WhatsAppClient();
+
+const redis = new Redis({
+  host: process.env.REDIS_HOST || 'localhost',
+  port: parseInt(process.env.REDIS_PORT || '6379', 10),
+  password: process.env.REDIS_PASSWORD || undefined,
+  lazyConnect: true,
+  maxRetriesPerRequest: 1,
+  retryStrategy: () => null,
+});
+
+redis.connect().catch(() => {
+  // Silent fallback if Redis not running
+});
+
+function broadcastWorkerEvent(message: SSEMessage) {
+  redis.publish('jiranipass:events', JSON.stringify(message)).catch(() => {});
+}
 
 /**
  * Polls and processes pending Outbox Events.
@@ -62,13 +80,70 @@ async function processOutboxQueue() {
           console.log(`[Worker] Outbox event ${event.id} delivered -> Meta ID ${messageId}`);
         } catch (sendError: any) {
           console.error(`[Worker] Error delivering outbox event ${event.id}:`, sendError.message);
+          const nextRetry = event.retryCount + 1;
           await prisma.outboxEvent.update({
             where: { id: event.id },
             data: {
-              retryCount: { increment: 1 },
+              retryCount: nextRetry,
               lastError: sendError.message,
             },
           });
+
+          if (nextRetry >= 3) {
+            console.warn(`[Worker] Outbox event ${event.id} exceeded max retries. Marking request ${payload.requestId} as DELIVERY_FAILED`);
+            const req = await prisma.visitRequest.findUnique({ where: { id: payload.requestId } });
+            if (req && req.status === VisitStatus.PENDING) {
+              await prisma.$transaction(async (tx) => {
+                await tx.visitRequest.updateMany({
+                  where: { id: req.id, status: VisitStatus.PENDING, version: req.version },
+                  data: { status: VisitStatus.DELIVERY_FAILED, version: { increment: 1 } },
+                });
+                await tx.accessEvent.create({
+                  data: {
+                    visitRequestId: req.id,
+                    actorId: req.guardId,
+                    action: 'DELIVERY_FAILED',
+                    gateId: req.gateId,
+                    reason: `Template send failed after 3 attempts: ${sendError.message}`,
+                    previousStatus: VisitStatus.PENDING,
+                    newStatus: VisitStatus.DELIVERY_FAILED,
+                  },
+                });
+              });
+
+              const updatedReq = await prisma.visitRequest.findUnique({
+                where: { id: req.id },
+                include: { household: true, visitor: true, assignedResident: true },
+              });
+              if (updatedReq) {
+                broadcastWorkerEvent({
+                  type: 'VISIT_UPDATED',
+                  estateId: updatedReq.estateId,
+                  gateId: updatedReq.gateId,
+                  data: {
+                    id: updatedReq.id,
+                    estateId: updatedReq.estateId,
+                    reference: updatedReq.reference,
+                    unitCode: updatedReq.household.unitCode,
+                    visitorName: updatedReq.visitor.name,
+                    visitorPhone: updatedReq.visitor.phone,
+                    vehiclePlate: updatedReq.visitor.vehicleRegistration,
+                    purpose: updatedReq.purpose,
+                    status: updatedReq.status as unknown as VisitStatus,
+                    createdAt: updatedReq.createdAt.toISOString(),
+                    expiresAt: updatedReq.expiresAt.toISOString(),
+                    approvedUntil: null,
+                    checkedInAt: null,
+                    checkedOutAt: null,
+                    assignedResidentName: updatedReq.assignedResident.name,
+                    canAdmit: false,
+                    canCheckOut: false,
+                    canOverride: true,
+                  },
+                });
+              }
+            }
+          }
         }
       }
     }
@@ -78,23 +153,25 @@ async function processOutboxQueue() {
 }
 
 /**
- * Sweeps and transitions expired pending requests.
+ * Sweeps and transitions expired pending requests as well as un-admitted approved requests.
  */
 async function processExpiredRequests() {
   try {
-    const expired = await prisma.visitRequest.findMany({
+    // 1. Pending requests past expiration TTL
+    const expiredPending = await prisma.visitRequest.findMany({
       where: {
         status: VisitStatus.PENDING,
         expiresAt: { lt: new Date() },
       },
+      include: { household: true, visitor: true, assignedResident: true },
       take: 20,
     });
 
-    for (const req of expired) {
+    for (const req of expiredPending) {
       await prisma.$transaction(async (tx) => {
-        await tx.visitRequest.update({
-          where: { id: req.id },
-          data: { status: VisitStatus.EXPIRED },
+        await tx.visitRequest.updateMany({
+          where: { id: req.id, status: VisitStatus.PENDING, version: req.version },
+          data: { status: VisitStatus.EXPIRED, version: { increment: 1 } },
         });
 
         await tx.accessEvent.create({
@@ -103,12 +180,99 @@ async function processExpiredRequests() {
             actorId: req.guardId,
             action: 'EXPIRED',
             gateId: req.gateId,
+            reason: 'Pending request timed out without resident response',
             previousStatus: VisitStatus.PENDING,
             newStatus: VisitStatus.EXPIRED,
           },
         });
       });
+
+      broadcastWorkerEvent({
+        type: 'VISIT_UPDATED',
+        estateId: req.estateId,
+        gateId: req.gateId,
+        data: {
+          id: req.id,
+          estateId: req.estateId,
+          reference: req.reference,
+          unitCode: req.household.unitCode,
+          visitorName: req.visitor.name,
+          visitorPhone: req.visitor.phone,
+          vehiclePlate: req.visitor.vehicleRegistration,
+          purpose: req.purpose,
+          status: VisitStatus.EXPIRED,
+          createdAt: req.createdAt.toISOString(),
+          expiresAt: req.expiresAt.toISOString(),
+          approvedUntil: null,
+          checkedInAt: null,
+          checkedOutAt: null,
+          assignedResidentName: req.assignedResident.name,
+          canAdmit: false,
+          canCheckOut: false,
+          canOverride: true,
+        },
+      });
+
       console.log(`[Worker] Visit request ${req.reference} marked EXPIRED due to timeout`);
+    }
+
+    // 2. Approved requests past approvedUntil window that were not checked in
+    const expiredApproved = await prisma.visitRequest.findMany({
+      where: {
+        status: VisitStatus.APPROVED,
+        approvedUntil: { lt: new Date() },
+      },
+      include: { household: true, visitor: true, assignedResident: true },
+      take: 20,
+    });
+
+    for (const req of expiredApproved) {
+      await prisma.$transaction(async (tx) => {
+        await tx.visitRequest.updateMany({
+          where: { id: req.id, status: VisitStatus.APPROVED, version: req.version },
+          data: { status: VisitStatus.EXPIRED, version: { increment: 1 } },
+        });
+
+        await tx.accessEvent.create({
+          data: {
+            visitRequestId: req.id,
+            actorId: req.guardId,
+            action: 'EXPIRED',
+            gateId: req.gateId,
+            reason: 'Approved window elapsed prior to physical check-in',
+            previousStatus: VisitStatus.APPROVED,
+            newStatus: VisitStatus.EXPIRED,
+          },
+        });
+      });
+
+      broadcastWorkerEvent({
+        type: 'VISIT_UPDATED',
+        estateId: req.estateId,
+        gateId: req.gateId,
+        data: {
+          id: req.id,
+          estateId: req.estateId,
+          reference: req.reference,
+          unitCode: req.household.unitCode,
+          visitorName: req.visitor.name,
+          visitorPhone: req.visitor.phone,
+          vehiclePlate: req.visitor.vehicleRegistration,
+          purpose: req.purpose,
+          status: VisitStatus.EXPIRED,
+          createdAt: req.createdAt.toISOString(),
+          expiresAt: req.expiresAt.toISOString(),
+          approvedUntil: req.approvedUntil?.toISOString() || null,
+          checkedInAt: null,
+          checkedOutAt: null,
+          assignedResidentName: req.assignedResident.name,
+          canAdmit: false,
+          canCheckOut: false,
+          canOverride: true,
+        },
+      });
+
+      console.log(`[Worker] Approved visit request ${req.reference} marked EXPIRED due to window timeout`);
     }
   } catch (err: any) {
     console.error('[Worker] Expiry check error:', err.message);
@@ -116,22 +280,40 @@ async function processExpiredRequests() {
 }
 
 /**
- * Daily retention purge: Cleans routine visitor logs older than 90 days (Kenya ODPC compliance).
+ * Daily retention purge: Sanitizes routine visitor PII older than estate's configured retention days (Kenya ODPC compliance).
  */
 async function processDataRetentionPurge() {
   try {
-    const retentionDays = parseInt(process.env.DEFAULT_DATA_RETENTION_DAYS || '90', 10);
-    const cutoffDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+    const estates = await prisma.estate.findMany();
 
-    const deleted = await prisma.visitRequest.deleteMany({
-      where: {
-        createdAt: { lt: cutoffDate },
-        status: { in: [VisitStatus.CHECKED_OUT, VisitStatus.EXPIRED, VisitStatus.DENIED] },
-      },
-    });
+    for (const estate of estates) {
+      const retentionDays = estate.visitorRetentionDays || 90;
+      const cutoffDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
 
-    if (deleted.count > 0) {
-      console.log(`[Worker] Purged ${deleted.count} routine visit records older than ${retentionDays} days`);
+      // Anonymize visitor PII for completed/expired routine visits past retention threshold
+      const expiredVisits = await prisma.visitRequest.findMany({
+        where: {
+          estateId: estate.id,
+          createdAt: { lt: cutoffDate },
+          status: { in: [VisitStatus.CHECKED_OUT, VisitStatus.EXPIRED, VisitStatus.DENIED] },
+        },
+        select: { visitorId: true },
+        take: 50,
+      });
+
+      if (expiredVisits.length > 0) {
+        const visitorIds = [...new Set(expiredVisits.map((v) => v.visitorId))];
+        const updated = await prisma.visitor.updateMany({
+          where: { id: { in: visitorIds }, phone: { not: null } },
+          data: {
+            phone: null,
+            vehicleRegistration: null,
+          },
+        });
+        if (updated.count > 0) {
+          console.log(`[Worker] Anonymized ${updated.count} visitor records in ${estate.name} older than ${retentionDays} days`);
+        }
+      }
     }
   } catch (err: any) {
     console.error('[Worker] Retention purge error:', err.message);

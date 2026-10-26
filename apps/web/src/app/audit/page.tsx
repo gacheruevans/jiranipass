@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { authFetch } from '@/lib/api';
 
 interface AuditEvent {
   id: string;
@@ -19,59 +20,26 @@ interface AuditEvent {
 export default function AuditTrailPage() {
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [filterAction, setFilterAction] = useState<string>('ALL');
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchAuditEvents = async () => {
+    try {
+      const res = await authFetch('/v1/admin/audit-events?limit=100');
+      if (res.ok) {
+        const data = await res.json();
+        setEvents(data);
+      }
+    } catch (e) {
+      console.warn('Could not fetch real audit events, fallback to local state:', e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    // Demo audit records matching our seeded estate
-    setEvents([
-      {
-        id: 'evt-1',
-        action: 'REQUEST_CREATED',
-        reference: 'V-8K4Q',
-        visitorName: 'Mary Njoroge',
-        unitCode: 'House B12',
-        gateId: 'GATE-MAIN',
-        actorName: 'Samson Omwamba',
-        actorRole: 'GUARD',
-        createdAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'evt-2',
-        action: 'APPROVED',
-        reference: 'V-8K4Q',
-        visitorName: 'Mary Njoroge',
-        unitCode: 'House B12',
-        gateId: 'GATE-MAIN',
-        actorName: 'Mary Nduta (Resident)',
-        actorRole: 'RESIDENT',
-        createdAt: new Date(Date.now() - 23 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'evt-3',
-        action: 'CHECKED_IN',
-        reference: 'V-8K4Q',
-        visitorName: 'Mary Njoroge',
-        unitCode: 'House B12',
-        gateId: 'GATE-MAIN',
-        actorName: 'Samson Omwamba',
-        actorRole: 'GUARD',
-        verificationMethod: 'PHYSICAL_RECOGNITION',
-        reason: 'Plate matched KDD 888Y',
-        createdAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 'evt-4',
-        action: 'OVERRIDE_ADMITTED',
-        reference: 'V-3M7T',
-        visitorName: 'David Kilonzo',
-        unitCode: 'House A1',
-        gateId: 'GATE-MAIN',
-        actorName: 'Peter Mwangi (Supervisor)',
-        actorRole: 'SUPERVISOR',
-        verificationMethod: 'PHONE_CALL_CONFIRMED',
-        reason: 'Resident phone battery depleted; confirmed arrival directly via secondary landline number.',
-        createdAt: new Date(Date.now() - 85 * 60 * 1000).toISOString(),
-      },
-    ]);
+    fetchAuditEvents();
+    const interval = setInterval(fetchAuditEvents, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const filteredEvents = events.filter((e) => {

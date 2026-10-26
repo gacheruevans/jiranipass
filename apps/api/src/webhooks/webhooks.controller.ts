@@ -56,12 +56,16 @@ export class WebhooksController {
 
   /**
    * Development & Test helper endpoint to simulate a resident WhatsApp button reply.
+   * Strictly disabled in production environments.
    */
   @Post('simulate-reply')
   @HttpCode(HttpStatus.OK)
   async simulateReply(
     @Body() body: { requestId: string; action: 'APPROVE' | 'DENY' },
   ) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new UnauthorizedException('Simulation endpoints are strictly disabled in production');
+    }
     return this.webhooksService.simulateResidentReply(body.requestId, body.action);
   }
 }

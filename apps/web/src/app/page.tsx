@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { VisitRequestResponse, VisitStatus } from '@jiranipass/shared';
+import { authFetch, API_URL } from '@/lib/api';
 
 export default function DashboardPage() {
   const [requests, setRequests] = useState<VisitRequestResponse[]>([]);
@@ -16,18 +17,10 @@ export default function DashboardPage() {
   const [vehiclePlate, setVehiclePlate] = useState('');
   const [purpose, setPurpose] = useState('Personal visit');
 
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
   // Fetch visit requests
   const fetchRequests = async () => {
     try {
-      // In dev console, query requests with guard login or simulated token
-      const res = await fetch(`${API_URL}/v1/visit-requests?limit=50`, {
-        headers: {
-          // Dev bypass or Authorization token
-          'Content-Type': 'application/json',
-        },
-      });
+      const res = await authFetch(`/v1/visit-requests?limit=50`);
       if (res.ok) {
         const data = await res.json();
         setRequests(data);
@@ -50,9 +43,8 @@ export default function DashboardPage() {
   const handleSimulateReply = async (requestId: string, action: 'APPROVE' | 'DENY') => {
     setIsSimulating(requestId);
     try {
-      await fetch(`${API_URL}/v1/webhooks/whatsapp/simulate-reply`, {
+      await authFetch(`/v1/webhooks/whatsapp/simulate-reply`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ requestId, action }),
       });
       await fetchRequests();
@@ -477,12 +469,11 @@ export default function DashboardPage() {
                 onClick={async () => {
                   try {
                     // Search household id
-                    const hRes = await fetch(`${API_URL}/v1/households?query=${encodeURIComponent(unitCode)}`);
+                    const hRes = await authFetch(`/v1/households?query=${encodeURIComponent(unitCode)}`);
                     const households = await hRes.json();
                     if (households && households.length > 0) {
-                      await fetch(`${API_URL}/v1/visit-requests`, {
+                      await authFetch(`/v1/visit-requests`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                           householdId: households[0].id,
                           visitorName,

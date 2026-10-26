@@ -2,6 +2,7 @@ import { Controller, Post, Body, Get, UseGuards, HttpCode, HttpStatus } from '@n
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { CurrentUser, AuthenticatedUser } from './current-user.decorator';
+import { GuardLoginDto, AdminLoginDto } from './dto/auth.dto';
 
 @Controller('v1/auth')
 export class AuthController {
@@ -9,9 +10,7 @@ export class AuthController {
 
   @Post('guard/login')
   @HttpCode(HttpStatus.OK)
-  async loginGuard(
-    @Body() body: { phone: string; pin: string; gateId: string; deviceId: string },
-  ) {
+  async loginGuard(@Body() body: GuardLoginDto) {
     return this.authService.loginGuard(body);
   }
 
@@ -24,7 +23,7 @@ export class AuthController {
 
   @Post('admin/login')
   @HttpCode(HttpStatus.OK)
-  async loginAdmin(@Body() body: { phone: string; password: string }) {
+  async loginAdmin(@Body() body: AdminLoginDto) {
     return this.authService.loginAdmin(body);
   }
 

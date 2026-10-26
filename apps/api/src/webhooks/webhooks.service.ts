@@ -42,8 +42,14 @@ export class WebhooksService {
    */
   verifySignature(rawBody: Buffer, signatureHeader: string | undefined): boolean {
     const appSecret = process.env.META_APP_SECRET;
-    // In local development without Meta secret configured, allow bypass with warning
+    const isProd = process.env.NODE_ENV === 'production';
+
+    // In production, signature verification MUST fail closed if secret is not set
     if (!appSecret || appSecret.includes('your_meta_app_secret')) {
+      if (isProd) {
+        this.logger.error('CRITICAL: META_APP_SECRET is not configured in production. Rejecting webhook.');
+        return false;
+      }
       this.logger.warn('META_APP_SECRET not configured. Bypassing signature check in development mode.');
       return true;
     }
@@ -58,10 +64,20 @@ export class WebhooksService {
       .digest('hex');
 
     const receivedSignature = signatureHeader.substring(7);
-    return crypto.timingSafeEqual(
-      Buffer.from(receivedSignature, 'hex'),
-      Buffer.from(expectedSignature, 'hex'),
-    );
+
+    // Prevent crypto.timingSafeEqual from throwing RangeError on buffer length mismatch
+    if (Buffer.byteLength(receivedSignature, 'utf8') !== Buffer.byteLength(expectedSignature, 'utf8')) {
+      return false;
+    }
+
+    try {
+      return crypto.timingSafeEqual(
+        Buffer.from(receivedSignature, 'hex'),
+        Buffer.from(expectedSignature, 'hex'),
+      );
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -123,35 +139,57 @@ export class WebhooksService {
       },
     });
 
-    // Extract button reply payload
-    let rawPayload = '';
-    if (message.type === 'interactive' && message.interactive?.button_reply) {
-      rawPayload = message.interactive.button_reply.id;
-    } else if (message.type === 'button' && message.button) {
-      rawPayload = message.button.payload;
+    try {
+      // Extract button reply payload
+      let rawPayload = '';
+      if (message.type === 'interactive' && message.interactive?.button_reply) {
+        rawPayload = message.interactive.button_reply.id;
+      } else if (message.type === 'button' && message.button) {
+        rawPayload = message.button.payload;
+      }
+
+      if (!rawPayload) {
+        this.logger.debug(`Message ${providerEventId} is not a button reply. Ignoring.`);
+        await this.prisma.webhookEvent.update({
+          where: { providerEventId },
+          data: { processingState: WebhookProcessingState.IGNORED },
+        });
+        return;
+      }
+
+      const parsed = parseButtonPayload(rawPayload);
+      if (!parsed) {
+        this.logger.warn(`Unrecognized button payload format: ${rawPayload}`);
+        await this.prisma.webhookEvent.update({
+          where: { providerEventId },
+          data: { processingState: WebhookProcessingState.IGNORED },
+        });
+        return;
+      }
+
+      const { requestId, action } = parsed;
+      const senderPhone = normalizePhoneNumber(message.from);
+
+      await this.applyResidentDecision({
+        requestId,
+        action,
+        senderPhone,
+        providerMessageId: providerEventId,
+        channel: DecisionChannel.WHATSAPP_BUTTON,
+      });
+
+      await this.prisma.webhookEvent.update({
+        where: { providerEventId },
+        data: { processingState: WebhookProcessingState.PROCESSED },
+      });
+    } catch (err: any) {
+      this.logger.error(`Error processing webhook message ${providerEventId}: ${err.message}`);
+      await this.prisma.webhookEvent.update({
+        where: { providerEventId },
+        data: { processingState: WebhookProcessingState.FAILED },
+      });
+      throw err;
     }
-
-    if (!rawPayload) {
-      this.logger.debug(`Message ${providerEventId} is not a button reply. Ignoring.`);
-      return;
-    }
-
-    const parsed = parseButtonPayload(rawPayload);
-    if (!parsed) {
-      this.logger.warn(`Unrecognized button payload format: ${rawPayload}`);
-      return;
-    }
-
-    const { requestId, action } = parsed;
-    const senderPhone = normalizePhoneNumber(message.from);
-
-    await this.applyResidentDecision({
-      requestId,
-      action,
-      senderPhone,
-      providerMessageId: providerEventId,
-      channel: DecisionChannel.WHATSAPP_BUTTON,
-    });
   }
 
   /**
@@ -184,6 +222,70 @@ export class WebhooksService {
 
       if (sendState === 'FAILED') {
         this.logger.warn(`WhatsApp message delivery failed for request ${attempt.visitRequestId}`);
+
+        const currentReq = await this.prisma.visitRequest.findUnique({
+          where: { id: attempt.visitRequestId },
+          include: { household: true, visitor: true, assignedResident: true },
+        });
+
+        if (currentReq && currentReq.status === VisitStatus.PENDING) {
+          const updated = await this.prisma.$transaction(async (tx) => {
+            const updateResult = await tx.visitRequest.updateMany({
+              where: {
+                id: currentReq.id,
+                status: VisitStatus.PENDING,
+                version: currentReq.version,
+              },
+              data: {
+                status: VisitStatus.DELIVERY_FAILED,
+                version: { increment: 1 },
+              },
+            });
+
+            if (updateResult.count > 0) {
+              await tx.accessEvent.create({
+                data: {
+                  visitRequestId: currentReq.id,
+                  actorId: currentReq.guardId,
+                  action: 'DELIVERY_FAILED',
+                  gateId: currentReq.gateId,
+                  previousStatus: VisitStatus.PENDING,
+                  newStatus: VisitStatus.DELIVERY_FAILED,
+                },
+              });
+
+              return tx.visitRequest.findUnique({
+                where: { id: currentReq.id },
+                include: { household: true, visitor: true, assignedResident: true },
+              });
+            }
+            return null;
+          });
+
+          if (updated) {
+            const formatted = {
+              id: updated.id,
+              estateId: updated.estateId,
+              reference: updated.reference,
+              unitCode: updated.household.unitCode,
+              visitorName: updated.visitor.name,
+              visitorPhone: updated.visitor.phone,
+              vehiclePlate: updated.visitor.vehicleRegistration,
+              purpose: updated.purpose,
+              status: updated.status as VisitStatus,
+              createdAt: updated.createdAt.toISOString(),
+              expiresAt: updated.expiresAt.toISOString(),
+              approvedUntil: null,
+              checkedInAt: null,
+              checkedOutAt: null,
+              assignedResidentName: updated.assignedResident.name,
+              canAdmit: false,
+              canCheckOut: false,
+              canOverride: true,
+            };
+            this.sseService.broadcastVisitUpdate(updated.estateId, formatted, updated.gateId);
+          }
+        }
       }
     }
   }
@@ -206,7 +308,15 @@ export class WebhooksService {
         estate: true,
         household: true,
         visitor: true,
-        assignedResident: true,
+        assignedResident: {
+          include: {
+            whatsappConsents: {
+              where: { withdrawnAt: null },
+              orderBy: { grantedAt: 'desc' },
+              take: 1,
+            },
+          },
+        },
       },
     });
 
@@ -224,6 +334,16 @@ export class WebhooksService {
       return;
     }
 
+    // Security check: Disabled resident or withdrawn consent never enables admission (AT3)
+    if (resident.disabledAt) {
+      this.logger.warn(`Security check: Resident ${resident.name} account is disabled. Rejecting decision.`);
+      return;
+    }
+    if (resident.whatsappConsents.length === 0) {
+      this.logger.warn(`Security check: Resident ${resident.name} has no active WhatsApp consent. Rejecting decision.`);
+      return;
+    }
+
     // Verify request is currently PENDING
     if (request.status !== VisitStatus.PENDING) {
       this.logger.warn(
@@ -234,9 +354,21 @@ export class WebhooksService {
 
     // Check expiration
     if (new Date() > request.expiresAt) {
-      await this.prisma.visitRequest.update({
-        where: { id: request.id },
-        data: { status: VisitStatus.EXPIRED },
+      await this.prisma.$transaction(async (tx) => {
+        await tx.visitRequest.updateMany({
+          where: { id: request.id, status: VisitStatus.PENDING, version: request.version },
+          data: { status: VisitStatus.EXPIRED, version: { increment: 1 } },
+        });
+        await tx.accessEvent.create({
+          data: {
+            visitRequestId: request.id,
+            actorId: resident.id,
+            action: 'EXPIRED',
+            gateId: request.gateId,
+            previousStatus: VisitStatus.PENDING,
+            newStatus: VisitStatus.EXPIRED,
+          },
+        });
       });
       return;
     }

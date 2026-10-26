@@ -68,6 +68,7 @@ enum AccessAction {
   OVERRIDE_ADMITTED
   EXPIRED
   REVOKED
+  DELIVERY_FAILED
 }
 
 enum ConsentSource {

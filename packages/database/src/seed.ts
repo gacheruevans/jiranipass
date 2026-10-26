@@ -1,5 +1,6 @@
 import { PrismaClient, Role, ConsentSource } from '@prisma/client';
 import * as crypto from 'crypto';
+import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
@@ -8,7 +9,11 @@ function hashPhone(phone: string): string {
 }
 
 function hashPin(pin: string): string {
-  return crypto.createHash('sha256').update(pin).digest('hex');
+  return bcrypt.hashSync(pin.trim(), 10);
+}
+
+function hashPassword(password: string): string {
+  return bcrypt.hashSync(password.trim(), 10);
 }
 
 async function main() {
@@ -175,7 +180,7 @@ async function main() {
       name: 'Admin Evans',
       phone: '+254700000000',
       phoneLookupHash: hashPhone('+254700000000'),
-      passwordHash: crypto.createHash('sha256').update('AdminPass123!').digest('hex'),
+      passwordHash: hashPassword('AdminPass123!'),
       verifiedAt: new Date(),
     },
   });

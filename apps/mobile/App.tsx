@@ -19,12 +19,13 @@ const API_URL = 'http://localhost:4000'; // For physical Android devices, use LA
 export default function App() {
   // Auth state
   const [token, setToken] = useState<string | null>(null);
-  const [guardName, setGuardName] = useState('Samson O.');
+  const [guardName, setGuardName] = useState('');
   const [activeTab, setActiveTab] = useState<'NEW_VISIT' | 'LIVE_QUEUE'>('NEW_VISIT');
+  const [isOffline, setIsOffline] = useState(false);
 
   // Login form state
   const [phone, setPhone] = useState('+254799000001');
-  const [pin, setPin] = useState('1234');
+  const [pin, setPin] = useState('');
   const [gateId, setGateId] = useState('GATE-MAIN');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
@@ -43,12 +44,17 @@ export default function App() {
 
   // Supervisor Override modal state
   const [showOverrideModal, setShowOverrideModal] = useState(false);
-  const [overridePin, setOverridePin] = useState('9999');
+  const [overridePin, setOverridePin] = useState('');
   const [overrideReason, setOverrideReason] = useState('');
   const [isOverriding, setIsOverriding] = useState(false);
 
   // Login handler
   const handleLogin = async () => {
+    if (!phone.trim() || !pin.trim()) {
+      Alert.alert('Required', 'Please enter your registered phone number and PIN');
+      return;
+    }
+
     setIsLoggingIn(true);
     try {
       const res = await fetch(`${API_URL}/v1/auth/guard/login`, {
@@ -66,13 +72,13 @@ export default function App() {
         const data = await res.json();
         setToken(data.token);
         setGuardName(data.user.name);
+        setIsOffline(false);
       } else {
         const err = await res.json();
         Alert.alert('Sign In Failed', err.message || 'Check your phone and PIN');
       }
     } catch (e: any) {
-      // In offline / local demo fallback, auto-login for gate test
-      setToken('demo-guard-token');
+      Alert.alert('Connection Failed', 'Could not reach server. Verify network and gate connection.');
     } finally {
       setIsLoggingIn(false);
     }
@@ -89,14 +95,11 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           setHouseholds(data);
+          setIsOffline(false);
         }
       } catch (e) {
-        // Fallback demo households
-        setHouseholds([
-          { id: '1', unitCode: 'House B12', primaryResidentName: 'Mary Nduta', maskedPhone: '+254 7XX XXX 678', isActive: true },
-          { id: '2', unitCode: 'House A1', primaryResidentName: 'John Kamau', maskedPhone: '+254 7XX XXX 001', isActive: true },
-          { id: '3', unitCode: 'House A2', primaryResidentName: 'Grace Wanjiku', maskedPhone: '+254 7XX XXX 002', isActive: true },
-        ]);
+        setIsOffline(true);
+        console.warn('Network error while searching households');
       }
     };
     fetchHouseholds();
@@ -112,8 +115,10 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setRequests(data);
+        setIsOffline(false);
       }
     } catch (e) {
+      setIsOffline(true);
       console.warn('Queue poll error');
     }
   };

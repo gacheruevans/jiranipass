@@ -21,9 +21,9 @@ import {
   CheckInDto,
   CheckOutDto,
   SupervisorOverrideDto,
-  Role,
-  VisitStatus,
-} from '@jiranipass/shared';
+  RevokeVisitRequestDto,
+} from './dto/visit-requests.dto';
+import { Role, VisitStatus } from '@jiranipass/shared';
 
 @Controller('v1/visit-requests')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -34,7 +34,7 @@ export class VisitRequestsController {
   ) {}
 
   @Post()
-  @Roles(Role.GUARD)
+  @Roles(Role.GUARD, Role.ESTATE_ADMIN, Role.SUPERVISOR, Role.SUPER_ADMIN)
   async createRequest(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateVisitRequestDto,
@@ -137,6 +137,26 @@ export class VisitRequestsController {
       },
       id,
       dto,
+    );
+  }
+
+  @Post(':id/revoke')
+  @Roles(Role.RESIDENT, Role.ESTATE_ADMIN, Role.SUPER_ADMIN, Role.SUPERVISOR, Role.GUARD)
+  async revokeRequest(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: RevokeVisitRequestDto,
+  ) {
+    return this.visitRequestsService.revokeRequest(
+      {
+        userId: user.userId,
+        estateId: user.estateId,
+        role: user.role,
+        gateId: user.gateId,
+        deviceId: user.deviceId,
+      },
+      id,
+      dto?.reason,
     );
   }
 }

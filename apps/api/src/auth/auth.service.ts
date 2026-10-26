@@ -1,8 +1,16 @@
-import { Injectable, UnauthorizedException, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  BadRequestException,
+  NotFoundException,
+  ForbiddenException,
+  Logger,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhoneNumber, Role } from '@jiranipass/shared';
 import * as crypto from 'crypto';
+import * as bcrypt from 'bcryptjs';
 
 interface GuardLoginDto {
   phone: string;
@@ -16,20 +24,79 @@ interface AdminLoginDto {
   password: string;
 }
 
+interface FailedAttemptTracker {
+  count: number;
+  lockedUntil?: Date;
+}
+
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+  private readonly failedAttempts = new Map<string, FailedAttemptTracker>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
   ) {}
 
-  private hashSecret(secret: string): string {
-    return crypto.createHash('sha256').update(secret.trim()).digest('hex');
+  /**
+   * Hashes secrets with bcrypt (10 rounds).
+   */
+  hashSecret(secret: string): string {
+    return bcrypt.hashSync(secret.trim(), 10);
+  }
+
+  /**
+   * Verifies plaintext against bcrypt hash, with backward-compatibility for legacy sha256.
+   */
+  verifySecret(plain: string, hashed: string | null | undefined): boolean {
+    if (!hashed || !plain) return false;
+    const trimmed = plain.trim();
+    if (hashed.startsWith('$2a$') || hashed.startsWith('$2b$')) {
+      return bcrypt.compareSync(trimmed, hashed);
+    }
+    // Legacy SHA-256 fallback
+    const legacySha = crypto.createHash('sha256').update(trimmed).digest('hex');
+    return legacySha === hashed;
+  }
+
+  /**
+   * Enforces brute-force lockout: 5 failed attempts locks target for 15 minutes.
+   */
+  private checkLockout(key: string) {
+    const record = this.failedAttempts.get(key);
+    if (record?.lockedUntil) {
+      if (new Date() < record.lockedUntil) {
+        const remainingMinutes = Math.ceil(
+          (record.lockedUntil.getTime() - Date.now()) / (60 * 1000),
+        );
+        throw new ForbiddenException(
+          `Too many failed attempts. Account locked for ${remainingMinutes} more minute(s).`,
+        );
+      } else {
+        this.failedAttempts.delete(key);
+      }
+    }
+  }
+
+  private registerFailedAttempt(key: string) {
+    const record = this.failedAttempts.get(key) || { count: 0 };
+    record.count += 1;
+    if (record.count >= 5) {
+      record.lockedUntil = new Date(Date.now() + 15 * 60 * 1000); // 15 min lock
+      this.logger.warn(`Security alert: Key '${key}' locked out for 15 minutes after 5 failed attempts.`);
+    }
+    this.failedAttempts.set(key, record);
+  }
+
+  private clearFailedAttempts(key: string) {
+    this.failedAttempts.delete(key);
   }
 
   async loginGuard(dto: GuardLoginDto) {
     const normalizedPhone = normalizePhoneNumber(dto.phone);
-    const pinHash = this.hashSecret(dto.pin);
+    const lockoutKey = `guard:${normalizedPhone}`;
+    this.checkLockout(lockoutKey);
 
     const user = await this.prisma.user.findFirst({
       where: {
@@ -44,13 +111,16 @@ export class AuthService {
       },
     });
 
-    if (!user || user.pinHash !== pinHash) {
+    if (!user || !this.verifySecret(dto.pin, user.pinHash)) {
+      this.registerFailedAttempt(lockoutKey);
       throw new UnauthorizedException('Invalid guard phone number or PIN');
     }
 
     if (user.memberships.length === 0) {
       throw new UnauthorizedException('User is not registered as an active guard in any estate');
     }
+
+    this.clearFailedAttempts(lockoutKey);
 
     const membership = user.memberships[0];
     const estate = membership.estate;
@@ -120,7 +190,8 @@ export class AuthService {
 
   async loginAdmin(dto: AdminLoginDto) {
     const normalizedPhone = normalizePhoneNumber(dto.phone);
-    const passwordHash = this.hashSecret(dto.password);
+    const lockoutKey = `admin:${normalizedPhone}`;
+    this.checkLockout(lockoutKey);
 
     const user = await this.prisma.user.findFirst({
       where: {
@@ -135,9 +206,17 @@ export class AuthService {
       },
     });
 
-    if (!user || user.passwordHash !== passwordHash) {
+    if (!user || !this.verifySecret(dto.password, user.passwordHash)) {
+      this.registerFailedAttempt(lockoutKey);
       throw new UnauthorizedException('Invalid administrative credentials');
     }
+
+    if (!user.memberships || user.memberships.length === 0) {
+      this.registerFailedAttempt(lockoutKey);
+      throw new UnauthorizedException('User has no administrative privileges assigned');
+    }
+
+    this.clearFailedAttempts(lockoutKey);
 
     const membership = user.memberships[0];
 
@@ -162,25 +241,31 @@ export class AuthService {
   }
 
   async verifySupervisorPin(estateId: string, pin: string) {
-    const pinHash = this.hashSecret(pin);
+    const lockoutKey = `supervisor:${estateId}`;
+    this.checkLockout(lockoutKey);
 
-    const supervisorMembership = await this.prisma.membership.findFirst({
+    // Retrieve active supervisors in this estate
+    const supervisorMemberships = await this.prisma.membership.findMany({
       where: {
         estateId,
         role: Role.SUPERVISOR,
         isActive: true,
         user: {
-          pinHash,
           disabledAt: null,
+          pinHash: { not: null },
         },
       },
       include: { user: true },
     });
 
-    if (!supervisorMembership) {
-      throw new UnauthorizedException('Invalid supervisor authorization PIN');
+    for (const membership of supervisorMemberships) {
+      if (this.verifySecret(pin, membership.user.pinHash)) {
+        this.clearFailedAttempts(lockoutKey);
+        return membership.user;
+      }
     }
 
-    return supervisorMembership.user;
+    this.registerFailedAttempt(lockoutKey);
+    throw new UnauthorizedException('Invalid supervisor authorization PIN');
   }
 }

@@ -5,6 +5,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../auth/current-user.decorator';
 import { Role } from '@jiranipass/shared';
+import { CreateHouseholdDto, EnrollResidentDto } from './dto/households.dto';
 
 @Controller('v1')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -24,22 +25,35 @@ export class HouseholdsController {
   @Roles(Role.ESTATE_ADMIN, Role.SUPER_ADMIN)
   async createHousehold(
     @CurrentUser() user: AuthenticatedUser,
-    @Body('unitCode') unitCode: string,
+    @Body() dto: CreateHouseholdDto,
   ) {
-    return this.householdsService.createHousehold(user.estateId, unitCode);
+    return this.householdsService.createHousehold(user.estateId, dto.unitCode);
   }
 
   @Post('admin/enroll-resident')
   @Roles(Role.ESTATE_ADMIN, Role.SUPER_ADMIN)
   async enrollResident(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: { householdId: string; name: string; phone: string },
+    @Body() dto: EnrollResidentDto,
   ) {
     return this.householdsService.enrollResident({
       estateId: user.estateId,
-      householdId: body.householdId,
-      name: body.name,
-      phone: body.phone,
+      householdId: dto.householdId,
+      name: dto.name,
+      phone: dto.phone,
+      consentSource: dto.consentSource,
     });
+  }
+
+  @Get('admin/audit-events')
+  @Roles(Role.ESTATE_ADMIN, Role.SUPER_ADMIN, Role.SUPERVISOR)
+  async getAuditEvents(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('limit') limit?: string,
+  ) {
+    return this.householdsService.getAuditEvents(
+      user.estateId,
+      limit ? parseInt(limit, 10) : 50,
+    );
   }
 }

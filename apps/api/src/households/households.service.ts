@@ -153,4 +153,49 @@ export class HouseholdsService {
       },
     };
   }
+
+  /**
+   * Retrieve immutable access audit trail for estate managers.
+   */
+  async getAuditEvents(estateId: string, limit = 50) {
+    const events = await this.prisma.accessEvent.findMany({
+      where: {
+        visitRequest: { estateId },
+      },
+      include: {
+        actor: {
+          include: {
+            memberships: {
+              where: { estateId },
+              take: 1,
+            },
+          },
+        },
+        visitRequest: {
+          include: {
+            household: true,
+            visitor: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+
+    return events.map((evt) => ({
+      id: evt.id,
+      action: evt.action,
+      reference: evt.visitRequest.reference,
+      visitorName: evt.visitRequest.visitor.name,
+      unitCode: evt.visitRequest.household.unitCode,
+      gateId: evt.gateId,
+      actorName: evt.actor.name,
+      actorRole: evt.actor.memberships[0]?.role || 'STAFF',
+      verificationMethod: evt.verificationMethod,
+      reason: evt.reason,
+      previousStatus: evt.previousStatus,
+      newStatus: evt.newStatus,
+      createdAt: evt.createdAt.toISOString(),
+    }));
+  }
 }

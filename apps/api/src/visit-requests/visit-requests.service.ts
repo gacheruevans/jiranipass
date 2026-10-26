@@ -15,6 +15,7 @@ import {
   SupervisorOverrideDto,
   VisitRequestResponse,
   VisitStatus,
+  Role,
   generateVisitReference,
   normalizePhoneNumber,
   buildButtonPayload,
@@ -53,7 +54,7 @@ export class VisitRequestsService {
       checkedOutAt: req.checkedOutAt?.toISOString() || null,
       assignedResidentName: req.assignedResident?.name || null,
       canAdmit: isApproved && notExpired,
-      canCheckOut: isCheckedIn,
+      canCheckOut: isCheckedIn || req.status === VisitStatus.OVERRIDE_ADMITTED,
       canOverride: [VisitStatus.PENDING, VisitStatus.EXPIRED, VisitStatus.DENIED, VisitStatus.DELIVERY_FAILED].includes(req.status),
     };
   }
@@ -66,6 +67,21 @@ export class VisitRequestsService {
     guardUser: { userId: string; estateId: string; gateId?: string; deviceId?: string },
     dto: CreateVisitRequestDto,
   ): Promise<VisitRequestResponse> {
+    // 0. Idempotency Check: return existing visit request if idempotencyKey was already submitted
+    if (dto.idempotencyKey) {
+      const existing = await this.prisma.visitRequest.findUnique({
+        where: { idempotencyKey: dto.idempotencyKey },
+        include: {
+          household: true,
+          visitor: true,
+          assignedResident: true,
+        },
+      });
+      if (existing) {
+        return this.formatVisitResponse(existing);
+      }
+    }
+
     // 1. Verify household belongs to guard's estate
     const household = await this.prisma.household.findFirst({
       where: { id: dto.householdId, estateId: guardUser.estateId, isActive: true },
@@ -102,83 +118,117 @@ export class VisitRequestsService {
       throw new BadRequestException('Primary resident has not opted in to WhatsApp access alerts');
     }
 
-    // 2. Normalize and upsert visitor
-    const visitor = await this.prisma.visitor.create({
-      data: {
-        estateId: guardUser.estateId,
-        name: dto.visitorName.trim(),
-        phone: dto.visitorPhone ? normalizePhoneNumber(dto.visitorPhone) : null,
-        vehicleRegistration: dto.vehiclePlate ? dto.vehiclePlate.trim().toUpperCase() : null,
+    // 2. Anti-spam check: prevent rapid repeated pending requests for the same household
+    const recentPending = await this.prisma.visitRequest.findFirst({
+      where: {
+        householdId: household.id,
+        status: VisitStatus.PENDING,
+        createdAt: { gte: new Date(Date.now() - 45 * 1000) },
       },
     });
+    if (recentPending) {
+      throw new ConflictException(
+        `A pending arrival request (${recentPending.reference}) for ${household.unitCode} was just submitted. Please wait before requesting again.`,
+      );
+    }
 
     const ttlMinutes = household.estate.approvalTtlMinutes || 10;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttlMinutes * 60 * 1000);
-    const reference = generateVisitReference();
-    const gateId = dto.gateId || guardUser.gateId || 'GATE-MAIN';
+    const gateId = guardUser.gateId || dto.gateId || 'GATE-MAIN';
 
-    // 3. Atomically create VisitRequest, OutboxEvent, and AccessEvent
-    const result = await this.prisma.$transaction(async (tx) => {
-      const visitRequest = await tx.visitRequest.create({
-        data: {
-          estateId: guardUser.estateId,
-          householdId: household.id,
-          visitorId: visitor.id,
-          guardId: guardUser.userId,
-          assignedResidentId: resident.id,
-          gateId,
-          reference,
-          status: VisitStatus.PENDING,
-          purpose: dto.purpose?.trim() || null,
-          expiresAt,
-          idempotencyKey: dto.idempotencyKey || null,
-        },
-        include: {
-          household: true,
-          visitor: true,
-          assignedResident: true,
-        },
-      });
+    // 3. Atomically create Visitor, VisitRequest, OutboxEvent, and AccessEvent with collision retry
+    let result: any = null;
+    let attempts = 0;
 
-      // Transactional Outbox Job for WhatsApp Worker
-      const approvePayload = buildButtonPayload(visitRequest.id, 'APPROVE');
-      const denyPayload = buildButtonPayload(visitRequest.id, 'DENY');
+    while (attempts < 3) {
+      attempts++;
+      const reference = generateVisitReference();
 
-      await tx.outboxEvent.create({
-        data: {
-          aggregateId: visitRequest.id,
-          eventType: 'VISIT_REQUEST_CREATED',
-          payload: {
-            requestId: visitRequest.id,
-            reference: visitRequest.reference,
-            estateName: household.estate.name,
-            unitCode: household.unitCode,
-            visitorName: visitor.name,
-            recipientPhone: resident.phone,
-            recipientName: resident.name,
-            approvePayload,
-            denyPayload,
-            createdAt: now.toISOString(),
-          },
-        },
-      });
+      try {
+        result = await this.prisma.$transaction(async (tx) => {
+          const visitor = await tx.visitor.create({
+            data: {
+              estateId: guardUser.estateId,
+              name: dto.visitorName.trim(),
+              phone: dto.visitorPhone ? normalizePhoneNumber(dto.visitorPhone) : null,
+              vehicleRegistration: dto.vehiclePlate ? dto.vehiclePlate.trim().toUpperCase() : null,
+            },
+          });
 
-      // Immutable Access Audit Log
-      await tx.accessEvent.create({
-        data: {
-          visitRequestId: visitRequest.id,
-          actorId: guardUser.userId,
-          action: 'REQUEST_CREATED',
-          gateId,
-          deviceId: guardUser.deviceId,
-          previousStatus: VisitStatus.PENDING,
-          newStatus: VisitStatus.PENDING,
-        },
-      });
+          const visitRequest = await tx.visitRequest.create({
+            data: {
+              estateId: guardUser.estateId,
+              householdId: household.id,
+              visitorId: visitor.id,
+              guardId: guardUser.userId,
+              assignedResidentId: resident.id,
+              gateId,
+              reference,
+              status: VisitStatus.PENDING,
+              purpose: dto.purpose?.trim() || null,
+              expiresAt,
+              idempotencyKey: dto.idempotencyKey || null,
+            },
+            include: {
+              household: true,
+              visitor: true,
+              assignedResident: true,
+            },
+          });
 
-      return visitRequest;
-    });
+          // Transactional Outbox Job for WhatsApp Worker
+          const approvePayload = buildButtonPayload(visitRequest.id, 'APPROVE');
+          const denyPayload = buildButtonPayload(visitRequest.id, 'DENY');
+
+          await tx.outboxEvent.create({
+            data: {
+              aggregateId: visitRequest.id,
+              eventType: 'VISIT_REQUEST_CREATED',
+              payload: {
+                requestId: visitRequest.id,
+                reference: visitRequest.reference,
+                estateName: household.estate.name,
+                unitCode: household.unitCode,
+                visitorName: visitor.name,
+                recipientPhone: resident.phone,
+                recipientName: resident.name,
+                approvePayload,
+                denyPayload,
+                createdAt: now.toISOString(),
+              },
+            },
+          });
+
+          // Immutable Access Audit Log
+          await tx.accessEvent.create({
+            data: {
+              visitRequestId: visitRequest.id,
+              actorId: guardUser.userId,
+              action: 'REQUEST_CREATED',
+              gateId,
+              deviceId: guardUser.deviceId,
+              previousStatus: VisitStatus.PENDING,
+              newStatus: VisitStatus.PENDING,
+            },
+          });
+
+          return visitRequest;
+        });
+
+        break; // Successfully committed
+      } catch (err: any) {
+        // If reference collision, retry; otherwise rethrow
+        if (err.code === 'P2002' && err.meta?.target?.includes('reference') && attempts < 3) {
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    if (!result) {
+      throw new ConflictException('Could not generate unique reference for visit request. Please retry.');
+    }
 
     const formatted = this.formatVisitResponse(result);
     // Broadcast live event to guard devices
@@ -318,7 +368,7 @@ export class VisitRequestsService {
       throw new NotFoundException('Visit request not found');
     }
 
-    if (request.status !== VisitStatus.CHECKED_IN) {
+    if (request.status !== VisitStatus.CHECKED_IN && request.status !== VisitStatus.OVERRIDE_ADMITTED) {
       throw new BadRequestException(`Cannot check out visitor with status '${request.status}'`);
     }
 
@@ -328,7 +378,7 @@ export class VisitRequestsService {
       const updateResult = await tx.visitRequest.updateMany({
         where: {
           id: request.id,
-          status: VisitStatus.CHECKED_IN,
+          status: { in: [VisitStatus.CHECKED_IN, VisitStatus.OVERRIDE_ADMITTED] },
           version: request.version,
         },
         data: {
@@ -350,7 +400,7 @@ export class VisitRequestsService {
           gateId,
           reason: dto.notes || null,
           deviceId: guardUser.deviceId,
-          previousStatus: VisitStatus.CHECKED_IN,
+          previousStatus: request.status,
           newStatus: VisitStatus.CHECKED_OUT,
         },
       });
@@ -436,6 +486,75 @@ export class VisitRequestsService {
 
     const formatted = this.formatVisitResponse(updated);
     this.sseService.broadcastVisitUpdate(guardUser.estateId, formatted, gateId);
+    return formatted;
+  }
+
+  /**
+   * Revoke an approved visit request before physical check-in.
+   * Can be performed by the assigned resident, an admin, or gate supervisor.
+   */
+  async revokeRequest(
+    user: { userId: string; estateId: string; role: Role; gateId?: string; deviceId?: string },
+    requestId: string,
+    reason?: string,
+  ): Promise<VisitRequestResponse> {
+    const request = await this.prisma.visitRequest.findFirst({
+      where: { id: requestId, estateId: user.estateId },
+      include: { household: true, visitor: true, assignedResident: true },
+    });
+
+    if (!request) {
+      throw new NotFoundException('Visit request not found');
+    }
+
+    if (user.role === Role.RESIDENT && request.assignedResidentId !== user.userId) {
+      throw new ForbiddenException('Residents may only revoke visits to their own household');
+    }
+
+    if (request.status !== VisitStatus.APPROVED) {
+      throw new BadRequestException(
+        `Only visits in APPROVED status can be revoked prior to admission (current status: ${request.status})`,
+      );
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const updateResult = await tx.visitRequest.updateMany({
+        where: {
+          id: request.id,
+          status: VisitStatus.APPROVED,
+          version: request.version,
+        },
+        data: {
+          status: VisitStatus.REVOKED,
+          version: { increment: 1 },
+        },
+      });
+
+      if (updateResult.count === 0) {
+        throw new ConflictException('Concurrent modification detected during revoke');
+      }
+
+      await tx.accessEvent.create({
+        data: {
+          visitRequestId: request.id,
+          actorId: user.userId,
+          action: 'REVOKED',
+          gateId: user.gateId || request.gateId,
+          reason: reason || 'Revoked prior to admission',
+          deviceId: user.deviceId,
+          previousStatus: VisitStatus.APPROVED,
+          newStatus: VisitStatus.REVOKED,
+        },
+      });
+
+      return tx.visitRequest.findUnique({
+        where: { id: request.id },
+        include: { household: true, visitor: true, assignedResident: true },
+      });
+    });
+
+    const formatted = this.formatVisitResponse(updated);
+    this.sseService.broadcastVisitUpdate(user.estateId, formatted, request.gateId);
     return formatted;
   }
 }

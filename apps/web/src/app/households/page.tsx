@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { HouseholdSearchResult } from '@jiranipass/shared';
+import { authFetch } from '@/lib/api';
 
 export default function HouseholdsPage() {
   const [households, setHouseholds] = useState<HouseholdSearchResult[]>([]);
@@ -9,11 +10,9 @@ export default function HouseholdsPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [unitCode, setUnitCode] = useState('');
 
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
   const fetchHouseholds = async () => {
     try {
-      const res = await fetch(`${API_URL}/v1/households?query=${encodeURIComponent(search)}`);
+      const res = await authFetch(`/v1/households?query=${encodeURIComponent(search)}`);
       if (res.ok) {
         const data = await res.json();
         setHouseholds(data);
@@ -151,9 +150,8 @@ export default function HouseholdsPage() {
               <button
                 disabled={!unitCode.trim()}
                 onClick={async () => {
-                  await fetch(`${API_URL}/v1/admin/households`, {
+                  await authFetch(`/v1/admin/households`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ unitCode }),
                   });
                   setShowAddModal(false);
