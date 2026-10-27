@@ -11,10 +11,15 @@ import {
   Modal,
   Alert,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { VisitStatus, HouseholdSearchResult, VisitRequestResponse } from '@jiranipass/shared';
 
-const API_URL = 'http://localhost:4000'; // For physical Android devices, use LAN IP (e.g. 192.168.x.x)
+// Use 10.0.2.2 for Android emulator to connect to host localhost:4000
+const API_URL = Platform.select({
+  android: 'http://10.0.2.2:4000',
+  default: 'http://localhost:4000',
+});
 
 export default function App() {
   // Auth state
